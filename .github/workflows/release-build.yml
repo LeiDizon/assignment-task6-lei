@@ -1,0 +1,75 @@
+name: Release — Test & Build
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Run unit tests
+        run: |
+          echo "Running unit tests"
+          npm test
+
+      - name: Build (if present)
+        run: |
+          echo "Running build"
+          npm run build --if-present
+
+      - name: Collect build outputs and create zip
+        id: package
+        run: |
+          set -e
+          ARTDIR=artifacts
+          mkdir -p $ARTDIR
+          ZIPFILE=${ARTDIR}/build-${{ github.ref_name }}.zip
+
+          # Add common build directories if they exist
+          if [ -d build ]; then zip -r "$ZIPFILE" build; fi
+          if [ -d dist ]; then zip -r "$ZIPFILE" dist; fi
+          if [ -d android/app/build/outputs/apk ]; then zip -r "$ZIPFILE" android/app/build/outputs/apk; fi
+          if [ -d ios/build ]; then zip -r "$ZIPFILE" ios/build; fi
+
+          # Fallback: include repository files if nothing built
+          if [ ! -f "$ZIPFILE" ]; then
+            echo "No standard build output found; packaging repository source as fallback"
+            zip -r "$ZIPFILE" . -x "**/node_modules/**" "**/.git/**" "**/artifacts/**"
+          fi
+
+          echo "zipfile=$ZIPFILE" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact for workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-${{ github.ref_name }}
+          path: ${{ steps.package.outputs.zipfile }}
+
+      - name: Upload artifact to GitHub Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ${{ steps.package.outputs.zipfile }}
+          asset_name: build-${{ github.ref_name }}.zip
+          asset_content_type: application/zip
+
+      - name: Print release page and asset link
+        run: |
+          echo "Release page: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+          echo "Uploaded asset: build-${{ github.ref_name }}.zip (attached to the release)"
